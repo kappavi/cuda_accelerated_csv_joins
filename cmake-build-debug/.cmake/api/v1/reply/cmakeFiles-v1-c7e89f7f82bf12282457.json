@@ -1223,8 +1223,8 @@
 	"kind" : "cmakeFiles",
 	"paths" : 
 	{
-		"build" : "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cmake-build-debug",
-		"source" : "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project"
+		"build" : "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cuda_accelerated_csv_joins/cmake-build-debug",
+		"source" : "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cuda_accelerated_csv_joins"
 	},
 	"version" : 
 	{

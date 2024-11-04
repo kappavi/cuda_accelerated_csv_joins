@@ -1,4 +1,4 @@
-# Install script for directory: /Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project
+# Install script for directory: /Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cuda_accelerated_csv_joins
 
 # Set the install prefix
 if(NOT DEFINED CMAKE_INSTALL_PREFIX)
@@ -45,5 +45,5 @@ endif()
 
 string(REPLACE ";" "\n" CMAKE_INSTALL_MANIFEST_CONTENT
        "${CMAKE_INSTALL_MANIFEST_FILES}")
-file(WRITE "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cmake-build-debug/${CMAKE_INSTALL_MANIFEST}"
+file(WRITE "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cuda_accelerated_csv_joins/cmake-build-debug/${CMAKE_INSTALL_MANIFEST}"
      "${CMAKE_INSTALL_MANIFEST_CONTENT}")

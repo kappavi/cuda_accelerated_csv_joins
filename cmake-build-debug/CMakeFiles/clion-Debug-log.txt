@@ -1,4 +1,4 @@
-/Applications/CLion.app/Contents/bin/cmake/mac/aarch64/bin/cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_MAKE_PROGRAM=/Applications/CLion.app/Contents/bin/ninja/mac/aarch64/ninja -G Ninja -S "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project" -B "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cmake-build-debug"
+/Applications/CLion.app/Contents/bin/cmake/mac/aarch64/bin/cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_MAKE_PROGRAM=/Applications/CLion.app/Contents/bin/ninja/mac/aarch64/ninja -G Ninja -S "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cuda_accelerated_csv_joins" -B "/Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cuda_accelerated_csv_joins/cmake-build-debug"
 -- The C compiler identification is AppleClang 16.0.0.16000026
 -- The CXX compiler identification is AppleClang 16.0.0.16000026
 -- Detecting C compiler ABI info
@@ -11,6 +11,6 @@
 -- Check for working CXX compiler: /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/c++ - skipped
 -- Detecting CXX compile features
 -- Detecting CXX compile features - done
--- Configuring done (4.9s)
+-- Configuring done (0.4s)
 -- Generating done (0.0s)
--- Build files have been written to: /Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cmake-build-debug
+-- Build files have been written to: /Users/kappavi/Documents/Avi's Documents/School/GT/2024 Fall/CS 6422/EC Project/cuda_accelerated_csv_joins/cmake-build-debug
