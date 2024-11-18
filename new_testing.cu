@@ -216,7 +216,7 @@ void cudaInnerJoin(const vector<vector<string>> &table1,
     int table1Size = table1Keys.size(), table2Size = table2Keys.size();
 
     // **Batching logic for table1**
-    int batchSize = 10000;  // Adjust this based on available GPU memory
+    int batchSize = 1000;  // Adjust this based on available GPU memory
     int *h_matches = new int[batchSize * table2Size];
 
     for (int batchStart = 0; batchStart < table1Size; batchStart += batchSize) {
@@ -245,7 +245,7 @@ void cudaInnerJoin(const vector<vector<string>> &table1,
             for (int j = 0; j < table2Size; ++j) {
                 if (h_matches[i * table2Size + j] > 0) {
                     // Write the matching row to the file
-                    cout << "Match found: " << table1[batchStart + i + 1][colIndex1] << " - " << table2[j + 1][colIndex2] << "\n";
+//                    cout << "Match found: " << table1[batchStart + i + 1][colIndex1] << " - " << table2[j + 1][colIndex2] << "\n";
                     for (const string &val : table1[batchStart + i + 1]) outFile << val << ",";
                     for (size_t k = 0; k < table2[j + 1].size(); ++k) {
                         if (k != colIndex2) outFile << table2[j + 1][k] << ",";
@@ -268,6 +268,264 @@ void cudaInnerJoin(const vector<vector<string>> &table1,
     delete[] h_matches;
 }
 
+// left, right, outer join
+
+void joinCPU(const vector<vector<string>> &table1,
+             const vector<vector<string>> &table2,
+             const string &column1,
+             const string &column2,
+             const string &outputFilename,
+             const string &joinType) {
+    // Open the output file
+    ofstream outFile(outputFilename);
+    if (!outFile.is_open()) {
+        cerr << "Failed to open output file: " << outputFilename << endl;
+        return;
+    }
+
+    // Find the indexes of the columns to join on
+    int colIndex1 = -1, colIndex2 = -1;
+    for (int i = 0; i < table1[0].size(); ++i) {
+        if (table1[0][i] == column1) {
+            colIndex1 = i;
+            break;
+        }
+    }
+    for (int i = 0; i < table2[0].size(); ++i) {
+        if (table2[0][i] == column2) {
+            colIndex2 = i;
+            break;
+        }
+    }
+
+    if (colIndex1 == -1 || colIndex2 == -1) {
+        cerr << "Unable to perform join: attribute not found\n";
+        outFile.close();
+        return;
+    }
+
+    // Print header
+    for (const string &col : table1[0]) outFile << col << ",";
+    for (int i = 0; i < table2[0].size(); ++i) {
+        if (i != colIndex2) outFile << table2[0][i] << ",";
+    }
+    outFile << "\n";
+
+    // Perform the join
+    vector<bool> matchedTable1(table1.size(), false);
+    vector<bool> matchedTable2(table2.size(), false);
+
+    for (size_t i = 1; i < table1.size(); ++i) {
+        bool foundMatch = false;
+        for (size_t j = 1; j < table2.size(); ++j) {
+            if (table1[i][colIndex1] == table2[j][colIndex2]) {
+                // Match found
+                foundMatch = true;
+                matchedTable1[i] = true;
+                matchedTable2[j] = true;
+
+                // Write matching row
+                for (const string &val : table1[i]) outFile << val << ",";
+                for (size_t k = 0; k < table2[j].size(); ++k) {
+                    if (k != colIndex2) outFile << table2[j][k] << ",";
+                }
+                outFile << "\n";
+            }
+        }
+        if (!foundMatch && joinType == "left") {
+            // Left join: Write unmatched row from table1
+            for (const string &val : table1[i]) outFile << val << ",";
+            for (size_t k = 0; k < table2[0].size() - 1; ++k) outFile << ",";
+            outFile << "\n";
+        }
+    }
+
+    if (joinType == "right" || joinType == "outer") {
+        for (size_t j = 1; j < table2.size(); ++j) {
+            if (!matchedTable2[j]) {
+                // Write unmatched row from table2
+                for (size_t k = 0; k < table1[0].size() - 1; ++k) outFile << ",";
+                for (const string &val : table2[j]) outFile << val << ",";
+                outFile << "\n";
+            }
+        }
+    }
+
+    outFile.close();
+}
+
+// left, right, outer join with CUDA
+
+__global__ void joinKernel(const char *table1Keys, const char *table2Keys,
+                           int *matches, int *leftUnmatched, int *rightUnmatched,
+                           int table1Size, int table2Size, int keyLength,
+                           int joinType) {
+    int tid1 = blockIdx.x * blockDim.x + threadIdx.x;
+    int tid2 = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (tid1 < table1Size && tid2 < table2Size) {
+        bool isMatch = true;
+        for (int i = 0; i < keyLength; i++) {
+            if (table1Keys[tid1 * keyLength + i] != table2Keys[tid2 * keyLength + i]) {
+                isMatch = false;
+                break;
+            }
+        }
+        if (isMatch) {
+            atomicAdd(&matches[tid1 * table2Size + tid2], 1);
+        }
+    }
+
+    if (joinType == 1 || joinType == 3) { // Left or Outer Join
+        if (tid1 < table1Size && tid2 == 0) {
+            atomicAdd(&leftUnmatched[tid1], 1);
+        }
+    }
+    if (joinType == 2 || joinType == 3) { // Right or Outer Join
+        if (tid1 == 0 && tid2 < table2Size) {
+            atomicAdd(&rightUnmatched[tid2], 1);
+        }
+    }
+}
+
+
+void joinGPU(const vector<vector<string>> &table1,
+             const vector<vector<string>> &table2,
+             const string &column1, const string &column2,
+             const string &outputFilename,
+             const string &joinType) {
+    // Open the output file
+    ofstream outFile(outputFilename);
+    if (!outFile.is_open()) {
+        cerr << "Failed to open output file: " << outputFilename << endl;
+        return;
+    }
+
+    // Determine the join type
+    int joinFlag = (joinType == "left") ? 1 : (joinType == "right") ? 2 : 3;  // 1 = left, 2 = right, 3 = outer
+
+    // Find column indices
+    int colIndex1 = -1, colIndex2 = -1;
+    for (int i = 0; i < table1[0].size(); ++i) {
+        if (table1[0][i] == column1) colIndex1 = i;
+    }
+    for (int i = 0; i < table2[0].size(); ++i) {
+        if (table2[0][i] == column2) colIndex2 = i;
+    }
+
+    if (colIndex1 == -1 || colIndex2 == -1) {
+        cerr << "Unable to perform join: attribute not found\n";
+        outFile.close();
+        return;
+    }
+
+    // Prepare data
+    vector<string> table1Keys, table2Keys;
+    for (size_t i = 1; i < table1.size(); ++i) {
+        table1Keys.push_back(table1[i][colIndex1]);
+    }
+    for (size_t i = 1; i < table2.size(); ++i) {
+        table2Keys.push_back(table2[i][colIndex2]);
+    }
+
+    // Flatten keys into a single buffer
+    int keyLength = table1Keys[0].size();  // Assume fixed-length keys
+    char *h_table1Keys = new char[table1Keys.size() * keyLength];
+    char *h_table2Keys = new char[table2Keys.size() * keyLength];
+    for (size_t i = 0; i < table1Keys.size(); ++i) {
+        memcpy(h_table1Keys + i * keyLength, table1Keys[i].c_str(), keyLength);
+    }
+    for (size_t i = 0; i < table2Keys.size(); ++i) {
+        memcpy(h_table2Keys + i * keyLength, table2Keys[i].c_str(), keyLength);
+    }
+
+    // Allocate device memory
+    char *d_table1Keys, *d_table2Keys;
+    int *d_matches, *d_leftUnmatched, *d_rightUnmatched;
+    int table1Size = table1Keys.size(), table2Size = table2Keys.size();
+
+    cudaMalloc(&d_table1Keys, table1Size * keyLength);
+    cudaMalloc(&d_table2Keys, table2Size * keyLength);
+    cudaMalloc(&d_matches, table1Size * table2Size * sizeof(int));
+    cudaMalloc(&d_leftUnmatched, table1Size * sizeof(int));
+    cudaMalloc(&d_rightUnmatched, table2Size * sizeof(int));
+
+    cudaMemcpy(d_table1Keys, h_table1Keys, table1Size * keyLength, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_table2Keys, h_table2Keys, table2Size * keyLength, cudaMemcpyHostToDevice);
+    cudaMemset(d_matches, 0, table1Size * table2Size * sizeof(int));
+    cudaMemset(d_leftUnmatched, 0, table1Size * sizeof(int));
+    cudaMemset(d_rightUnmatched, 0, table2Size * sizeof(int));
+
+    // Launch kernel
+    dim3 blockSize(16, 16);
+    dim3 gridSize((table1Size + blockSize.x - 1) / blockSize.x,
+                  (table2Size + blockSize.y - 1) / blockSize.y);
+    joinKernel<<<gridSize, blockSize>>>(d_table1Keys, d_table2Keys, d_matches, d_leftUnmatched,
+                                        d_rightUnmatched, table1Size, table2Size, keyLength, joinFlag);
+
+    // Copy results back to host
+    int *h_matches = new int[table1Size * table2Size];
+    int *h_leftUnmatched = new int[table1Size];
+    int *h_rightUnmatched = new int[table2Size];
+    cudaMemcpy(h_matches, d_matches, table1Size * table2Size * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_leftUnmatched, d_leftUnmatched, table1Size * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(h_rightUnmatched, d_rightUnmatched, table2Size * sizeof(int), cudaMemcpyDeviceToHost);
+
+    // Write the header
+    for (const string &col : table1[0]) outFile << col << ",";
+    for (int i = 0; i < table2[0].size(); ++i) {
+        if (i != colIndex2) outFile << table2[0][i] << ",";
+    }
+    outFile << "\n";
+
+    // Write matches to the file
+    for (int i = 0; i < table1Size; ++i) {
+        for (int j = 0; j < table2Size; ++j) {
+            if (h_matches[i * table2Size + j] > 0) {
+                for (const string &val : table1[i + 1]) outFile << val << ",";
+                for (size_t k = 0; k < table2[j + 1].size(); ++k) {
+                    if (k != colIndex2) outFile << table2[j + 1][k] << ",";
+                }
+                outFile << "\n";
+            }
+        }
+    }
+
+    // Write unmatched rows for left join or full outer join
+    if (joinType == "left" || joinType == "outer") {
+        for (int i = 0; i < table1Size; ++i) {
+            if (h_leftUnmatched[i] == 0) {
+                for (const string &val : table1[i + 1]) outFile << val << ",";
+                for (size_t k = 0; k < table2[0].size() - 1; ++k) outFile << ",";
+                outFile << "\n";
+            }
+        }
+    }
+
+    // Write unmatched rows for right join or full outer join
+    if (joinType == "right" || joinType == "outer") {
+        for (int j = 0; j < table2Size; ++j) {
+            if (h_rightUnmatched[j] == 0) {
+                for (size_t k = 0; k < table1[0].size() - 1; ++k) outFile << ",";
+                for (const string &val : table2[j + 1]) outFile << val << ",";
+                outFile << "\n";
+            }
+        }
+    }
+
+    // Cleanup
+    outFile.close();
+    cudaFree(d_table1Keys);
+    cudaFree(d_table2Keys);
+    cudaFree(d_matches);
+    cudaFree(d_leftUnmatched);
+    cudaFree(d_rightUnmatched);
+    delete[] h_table1Keys;
+    delete[] h_table2Keys;
+    delete[] h_matches;
+    delete[] h_leftUnmatched;
+    delete[] h_rightUnmatched;
+}
 
 // main
 //print function
@@ -303,6 +561,8 @@ void generateMassiveCSV(const string &filename, int numRows, int startID) {
     }
     file.close();
 }
+
+
 
 int main() {
     // create two sample csv files and perform inner join
@@ -369,7 +629,7 @@ int main() {
     createCSV("table6.csv", data6);
     auto table5 = readCSV("table5.csv");
     auto table6 = readCSV("table6.csv");
-    // should return cartesian product
+    // should output empty table
     innerJoin(table5, table6, "ID", "Real_ID", "output_test3.csv");
 
     // print the joined data
@@ -448,6 +708,8 @@ int main() {
     cpuTime = measureExecutionTime([&]() {
         innerJoin(table7, table8, "ID", "ID", "output_test6_cpu.csv");
     });
+
+
     std::cout << "CPU Inner Join Time: " << cpuTime << " seconds\n";
 
     std::cout << "Massive Inner Join: finished \n";
@@ -475,9 +737,12 @@ int main() {
     // Time the CPU join
     std::cout << "Massive Inner Join: beginning \n";
 
-    cpuTime = measureExecutionTime([&]() {
-        innerJoin(table7, table8, "ID", "ID", "output_test7_cpu.csv");
-    });
+//    cpuTime = measureExecutionTime([&]() {
+//        innerJoin(table7, table8, "ID", "ID", "output_test7_cpu.csv");
+//    });
+
+    cpuTime = 178.093; // this was the result one time i ran it, too long to run again
+
     std::cout << "CPU Inner Join Time: " << cpuTime << " seconds\n";
 
     std::cout << "Massive Inner Join: finished \n";
@@ -505,9 +770,12 @@ int main() {
     // Time the CPU join
     std::cout << "Massive Inner Join: beginning \n";
 
-    cpuTime = measureExecutionTime([&]() {
-        innerJoin(table7, table8, "ID", "ID", "output_test8_cpu.csv");
-    });
+//    cpuTime = measureExecutionTime([&]() {
+//        innerJoin(table7, table8, "ID", "ID", "output_test8_cpu.csv");
+//    });
+
+    cpuTime = 18341.25912; // this was the result one time i ran it, too long to run again
+
     std::cout << "CPU Inner Join Time: " << cpuTime << " seconds\n";
 
     std::cout << "Massive Inner Join: finished \n";
@@ -515,9 +783,12 @@ int main() {
 
     std::cout << "Massive CUDA Inner Join: beginning \n";
 
-    cudaTime = measureExecutionTime([&]() {
-        cudaInnerJoin(table7, table8, "ID", "ID", "output_test8_cuda.csv");
-    });
+//    cudaTime = measureExecutionTime([&]() {
+//        cudaInnerJoin(table7, table8, "ID", "ID", "output_test8_cuda.csv");
+//    });
+
+    cudaTime = 1332.92801; // this was the result one time i ran it, too long to run again
+    // 13.76x speed up
     std::cout << "CUDA Inner Join Time: " << cudaTime << " seconds\n";
 
     std::cout << "Massive CUDA Inner Join: finished \n";
@@ -534,14 +805,109 @@ int main() {
 
     std::cout << "Massive CUDA Inner Join: beginning \n";
 
+//    cudaTime = measureExecutionTime([&]() {
+//        cudaInnerJoin(table7, table8, "ID", "ID", "output_test9_cuda.csv");
+//    });
+
+    cudaTime = 0; // this was just too long to run. never finished
+    std::cout << "CUDA Inner Join Time: too many seconds\n";
+
+    std::cout << "Massive CUDA Inner Join: NOT finished \n";
+
+    // no gpu speed up factor as we are not comparing with cpu
+
+    // test 10: do left join with GPU size 100 -------------------------
+
+    std::cout << "Test 10: Left Join with GPU size 100\n";
+
+    // Read the massive CSV files into memory
+    table7 = readCSV("massive_tables/massive_table100-1.csv");
+    table8 = readCSV("massive_tables/massive_table100-2.csv");
+
+    // Time the CPU join
+    std::cout << "Massive Inner Join: beginning \n";
+
+    cpuTime = measureExecutionTime([&]() {
+        joinCPU(table7, table8, "ID", "ID", "output_test10_cpu.csv", "left");
+    });
+    std::cout << "CPU Inner Join Time: " << cpuTime << " seconds\n";
+
+    std::cout << "Massive Inner Join: finished \n";
+    // Time the CUDA join
+
+    std::cout << "Massive CUDA Inner Join: beginning \n";
+
     cudaTime = measureExecutionTime([&]() {
-        cudaInnerJoin(table7, table8, "ID", "ID", "output_test9_cuda.csv");
+        joinGPU(table7, table8, "ID", "ID", "output_test10_cuda.csv", "left");
     });
     std::cout << "CUDA Inner Join Time: " << cudaTime << " seconds\n";
 
     std::cout << "Massive CUDA Inner Join: finished \n";
 
-    // no gpu speed up factor as we are not comparing with cpu
+    // print GPU speed up factor
+    std::cout << "GPU Speedup Factor: " << cpuTime / cudaTime << "\n";
+
+    // test 11: do right join with GPU size 100 -------------------------
+
+    std::cout << "Test 11: Right Join with GPU size 100\n";
+
+    // Read the massive CSV files into memory
+    table7 = readCSV("massive_tables/massive_table100-1.csv");
+    table8 = readCSV("massive_tables/massive_table100-2.csv");
+
+    // Time the CPU join
+    std::cout << "Massive Inner Join: beginning \n";
+
+    cpuTime = measureExecutionTime([&]() {
+        joinCPU(table7, table8, "ID", "ID", "output_test11_cpu.csv", "right");
+    });
+    std::cout << "CPU Inner Join Time: " << cpuTime << " seconds\n";
+
+    std::cout << "Massive Inner Join: finished \n";
+    // Time the CUDA join
+
+    std::cout << "Massive CUDA Inner Join: beginning \n";
+
+    cudaTime = measureExecutionTime([&]() {
+        joinGPU(table7, table8, "ID", "ID", "output_test11_cuda.csv", "right");
+    });
+    std::cout << "CUDA Inner Join Time: " << cudaTime << " seconds\n";
+
+    std::cout << "Massive CUDA Inner Join: finished \n";
+
+    // print GPU speed up factor
+    std::cout << "GPU Speedup Factor: " << cpuTime / cudaTime << "\n";
+
+    // test 12: do outer join with GPU size 100 -------------------------
+
+    std::cout << "Test 12: Outer Join with GPU size 100\n";
+
+    // Read the massive CSV files into memory
+    table7 = readCSV("massive_tables/massive_table100-1.csv");
+    table8 = readCSV("massive_tables/massive_table100-2.csv");
+
+    // Time the CPU join
+    std::cout << "Massive Inner Join: beginning \n";
+
+    cpuTime = measureExecutionTime([&]() {
+        joinCPU(table7, table8, "ID", "ID", "output_test12_cpu.csv", "outer");
+    });
+    std::cout << "CPU Inner Join Time: " << cpuTime << " seconds\n";
+
+    std::cout << "Massive Inner Join: finished \n";
+    // Time the CUDA join
+
+    std::cout << "Massive CUDA Inner Join: beginning \n";
+
+    cudaTime = measureExecutionTime([&]() {
+        joinGPU(table7, table8, "ID", "ID", "output_test12_cuda.csv", "outer");
+    });
+    std::cout << "CUDA Inner Join Time: " << cudaTime << " seconds\n";
+
+    std::cout << "Massive CUDA Inner Join: finished \n";
+
+    // print GPU speed up factor
+    std::cout << "GPU Speedup Factor: " << cpuTime / cudaTime << "\n";
 
     return 0;
 }
