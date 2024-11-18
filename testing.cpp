@@ -59,7 +59,7 @@ vector<vector<string>> readCSV(const string &filename) {
 
 // this function will perform inner join WITHOUT cuda
 
-const unordered_map<string, vector<string>>;
+// const unordered_map<string, vector<string>>;
 
 void innerJoin(const vector<vector<string>> &table1,
                const vector<vector<string>> &table2,
@@ -111,12 +111,22 @@ void innerJoin(const vector<vector<string>> &table1,
             }
         }
     }
+    cout << "\n";
 }
 
 
 // this function will perform inner join WITH cuda
 
 //TODO: Implement innerJoinCuda
+
+void innerJoinCuda(const vector<vector<string>> &table1,
+               const vector<vector<string>> &table2,
+               const string &column1,
+               const string &column2) {
+
+
+
+}
 
 // main
 //print function
